@@ -10,6 +10,8 @@
 #include "DipolePhaseFunction.hpp"
 #include "MaterialMix.hpp"
 #include "PhotonPacket.hpp"
+#include <map>
+#include <utility>
 
 ////////////////////////////////////////////////////////////////////
 
@@ -462,24 +464,31 @@ private:
         double width;   // width (eV)
     };
     // Resonant scattering -> LymanParam
-    struct LymanParam
+    struct ResonanceLineParam
     {
         int Z;                // atomic number
         int index;            // Lyman index (alpha1/2, alpha3/2, beta1/2, ...)
         double lambda;        // wavelength (m)
         double a;             // Voigt parameter
+        double lowerJ;
+        double upperJ;
         Array cumbranchingv;  // normalized cumulative branching
     };
 
     int _numIons;  // number of ions
     int _numFluo;  // number of fluorescence (+Lyman RC) transitions
     int _numLym;   // number of Lyman resonant scattering transitions
+    int _numHe;    // number of Helium-like resonant scattering transitions
+
 
     // persistent data for scattering
     vector<IonParam> _ionParamv;
     vector<FluorescenceParam> _fluorescenceParamv;
-    vector<LymanParam> _lymanParamv;
+    vector<ResonanceLineParam> _lymanParamv;
+    vector<ResonanceLineParam> _heliumParamv;
     vector<double> _vthermv;  // indexed on Z
+    std::map<std::pair<int, int>, int> _lymanParamIndexForLine;
+    std::map<std::pair<int, int>, int> _heliumParamIndexForLine;
 
     // wavelength grid (shifted to the left of the actually sampled points to approximate rounding)
     Array _lambdav;

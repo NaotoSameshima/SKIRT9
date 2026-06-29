@@ -7,6 +7,7 @@
 #define LYUTILS_HPP
 
 #include "Direction.hpp"
+#include <utility>
 
 class Configuration;
 class Random;

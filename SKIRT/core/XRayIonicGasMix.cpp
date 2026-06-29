@@ -20,6 +20,10 @@
 #include "TextInFile.hpp"
 #include <cmath>
 #include <tuple>
+#include "FilePaths.hpp"
+#include "System.hpp"
+#include <fstream>
+#include <sstream>
 
 ////////////////////////////////////////////////////////////////////
 
@@ -54,6 +58,45 @@ namespace
         Array row;
         while (infile.readRow(row)) result.emplace_back(row);
         return result;
+    }
+
+    double dipoleFractionFromJ(double lowerJ, double upperJ)
+    {
+        const double j = lowerJ;
+        const int deltaJ = static_cast<int>(std::round(upperJ - lowerJ));
+
+        double E1 = 0.0;
+        double E2 = 0.0;
+
+        if (deltaJ == 1)
+        {
+            E1 = 0.1 * 3.0 * j  * (6.0 * j + 7.0) / ((j + 1.0) * (2.0 * j + 1.0));
+            E2 = 0.1 * (2.0 * j + 5.0) * (j + 2.0) / ((j + 1.0) * (2.0 * j + 1.0));
+        }
+        else if (deltaJ == 0)
+        {
+            E1 = 0.1 * 3.0 * (2.0 * j * j + 2.0 * j + 1.0) / (j * (j + 1.0));
+            E2 = 0.1 * (2.0 * j - 1.0) * (2.0 * j + 3.0) / (j  * (j + 1.0));
+        }
+        else if (deltaJ == -1)
+        {
+            E1 = 0.1 * 3.0 * (j + 1.0) * (6.0 * j - 1.0) / (j * (2.0 * j + 1.0));
+            E2 = 0.1 * (2.0 * j - 3.0) * (j - 1.0) / (j * (2.0 * j + 1.0));
+        }
+        else
+        {
+            E1 = 1.0;
+            E2 = 0.0;
+        }
+
+        double sum = E1 + E2;
+        if (sum <= 0.0) throw FATALERROR("Invalid monopole/dipole weights");
+
+        double f = E2 / sum;
+        if (f < 0.0 || f > 1.0)
+            throw FATALERROR("Invalid dipole fraction");
+
+        return f;
     }
 
     // resource data for photo-absorption
@@ -119,36 +162,99 @@ namespace
         double W;         // FWHM of the Lorentz shape for the emitted photon (eV), or zero
     };
 
-    // resource data for Lyman-series
-    struct LymanResource
+    struct LineResource
     {
-        LymanResource(const Array& a) : Z(a[0]), index(a[1]), lamA(a[2]), lam(a[3]) {}
-        int ionIndex{-1};  // index of the ion
-        double sprob{-1};  // scatter probability after resonant scattering (<=1)
-        double vth{-1};    // sqrt(2) * thermal velocity (m/s)
-        int Z;             // atomic number
-        int index;         // Lyman index (alpha1/2, alpha3/2, beta1/2, ...)
-        double lamA;       // wavelength * Einstein A (m/s)
-        double lam;        // wavelength (m)
+        LineResource(const Array& a)
+            : Z(a[0]), index(a[1]), lowerLevelIndex(a[2]), upperLevelIndex(a[3]),
+            lowerJ(a[4]), upperJ(a[5]), lam(a[6]), lamA(a[7])
+        {}
+
+        int ionIndex{-1};
+        double sprob{-1};
+        double vth{-1};
+
+        int Z;
+        int index;
+        int lowerLevelIndex;
+        int upperLevelIndex;
+        double lowerJ;
+        double upperJ;
+        double lam;   // wavelength [m]
+        double lamA;  // lambda * A [m/s]
 
         double section(double lambda) const
         {
-            double a = lamA / (4. * M_PI * vth);
-
-            double g = (index % 2) + 1.;
+            double a = lamA / (4.0 * M_PI * vth);
+            double g = 2.0 * upperJ + 1.0;
             return LyUtils::section(lambda, lam, vth, a, g);
         }
     };
 
-    // resource data for Lyman branching (incoherent scattering)
-    struct LymanBranchResource
+    struct BranchResource
     {
-        LymanBranchResource(const Array& a) : Z(a[0]), upper(a[1]), lower(a[2]), prob(a[3]) {}
-        int Z;        // atomic number
-        int upper;    // upper Lyman index
-        int lower;    // lower Lyman index
-        double prob;  // branching probability
+        BranchResource(const Array& a) : Z(a[0]), upper(a[1]), lower(a[2]), prob(a[3]) {}
+
+        int Z;
+        int upper;
+        int lower;
+        double prob;
     };
+
+    vector<LineResource> loadLineResources(string filename, string description)
+    {
+        vector<LineResource> result;
+
+        string filepath = FilePaths::resource(filename);
+        std::ifstream infile = System::ifstream(filepath);
+
+        if (!infile)
+        {
+            throw FATALERROR("Could not open the " + description + " text file " + filepath);
+        }
+
+        string line;
+        while (std::getline(infile, line))
+        {
+            line = StringUtils::squeeze(line);
+
+            if (line.empty()) continue;
+            if (line[0] == '#') continue;
+
+            std::istringstream iss(line);
+
+            double Z;
+            double lineIndex;
+            double lowerLevelIndex;
+            double upperLevelIndex;
+            string lowerLevelTerm;
+            string upperLevelTerm;
+            double lowerJ;
+            double upperJ;
+            double lambda;
+            double lambdaA;
+
+            if (!(iss >> Z >> lineIndex >> lowerLevelIndex >> upperLevelIndex
+                    >> lowerLevelTerm >> upperLevelTerm
+                    >> lowerJ >> upperJ >> lambda >> lambdaA))
+            {
+                throw FATALERROR("Invalid row in the " + description + " text file " + filepath);
+            }
+
+            Array a(8);
+            a[0] = Z;
+            a[1] = lineIndex;
+            a[2] = lowerLevelIndex;
+            a[3] = upperLevelIndex;
+            a[4] = lowerJ;
+            a[5] = upperJ;
+            a[6] = lambda;
+            a[7] = lambdaA;
+
+            result.emplace_back(a);
+        }
+
+        return result;  
+    }
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -347,7 +453,8 @@ void XRayIonicGasMix::setupSelfBefore()
     // resources that are maintained during the setup
     vector<PhotoAbsorbResource> usedPar;
     vector<FluorescenceResource> usedFlr;
-    vector<LymanResource> usedLyr;
+    vector<LineResource> usedLyr;
+    vector<LineResource> usedHer;
 
     // Use nested scope to load and preprocess resources and discard unused resources
     {
@@ -358,20 +465,33 @@ void XRayIonicGasMix::setupSelfBefore()
         // fluorescence data
         auto flResource = loadStruct<FluorescenceResource, 7>(this, "Ionic_FL.txt", "fluorescence data");
         // generic Lyman series data
-        auto lyResource = loadStruct<LymanResource, 4>(this, "Ionic_LY.txt", "lyman series data");
+        auto lyResource = loadLineResources("selected_lines_hlike.txt", "Lyman line data");
         // Lyman recombination temperature-dependent yields
-        StoredTable<3> lyyResource(this, "Ionic_LY_Y.stab", "Z(1),Ly(1),T(K)", "Y(1)");
+        StoredTable<3> lyyResource(this, "branching_RR_hlike.stab", "Z(1),Index(1),T(K)", "Y(1)");
         // Lyman branching probabilities
-        vector<LymanBranchResource> lybResource;
+        vector<BranchResource> lybResource;
         if (resonantScattering())
-            lybResource = loadStruct<LymanBranchResource, 4>(this, "Ionic_LY_B.txt", "branching probabilities");
+            lybResource = loadStruct<BranchResource, 4>(this, "branching_RS_hlike.txt", "Lyman branching probabilities");
+        // generic Helium series data
+        auto heResource = loadLineResources("selected_lines_helike.txt", "Helium line data");
+        // Helium recombination temperature-dependent yields
+        StoredTable<3> heyResource(this, "branching_RR_helike.stab", "Z(1),Index(1),T(K)", "Y(1)");
+        // Helium branching probabilities
+        vector<BranchResource> hebResource;
+        if (resonantScattering())
+            hebResource = loadStruct<BranchResource, 4>(this, "branching_RS_helike.txt", "Helium branching probabilities");
 
         // ------------ preprocess resources ------------
 
         // Lyman recombination can be modelled as fluorescence following an inner shell PA (n,l)=(1,0)
         // This ignores the cascade and only models the transition back to the inner shell.
         // There is no PA data for (n,l)=(1,0) so we can simply add them without worrying about duplicates.
-        flResource.reserve(flResource.size() + lyResource.size());
+        int numHeZ = 0;
+        for (const auto& her : heResource)
+        {
+            if (her.index == 0) ++numHeZ;
+        }
+        flResource.reserve(flResource.size() + lyResource.size() + heResource.size() + numHeZ);
         for (const auto& lyr : lyResource)
         {
             double Z = lyr.Z;
@@ -379,6 +499,27 @@ void XRayIonicGasMix::setupSelfBefore()
             double E = wavelengthToFromEnergy(lyr.lam);
             double omega = lyyResource(Z, Ly, temperature());
             Array params = {Z, 1, 1, 0, omega, E, 0.};  // ensure order is correct here!
+            flResource.emplace_back(params);
+        }
+        for (const auto& her : heResource)
+        {
+            double Z = her.Z;
+            double He = her.index;
+            double E = wavelengthToFromEnergy(her.lam);
+            double omega = heyResource(Z, He, temperature());
+
+            Array params = {Z, 2, 1, 0, omega, E, 0.};  // Z, N, n, l, omega, E, W
+            flResource.emplace_back(params);
+        }
+        for (const auto& her : heResource)
+        {
+            if (her.index != 0) continue;  // z line only
+
+            double Z = her.Z;
+            double E = wavelengthToFromEnergy(her.lam);
+            double omega = 1.0;  
+
+            Array params = {Z, 3., 1., 0., omega, E, 0.};  // Li-like K-shell PI -> He-like z
             flResource.emplace_back(params);
         }
 
@@ -424,9 +565,23 @@ void XRayIonicGasMix::setupSelfBefore()
                     }
                 }
             }
+
+            // add Helium complex lines to this (helium-like) ION
+            if (resonantScattering() && ion.N == 2)
+            {
+                for (auto& he : heResource)
+                {
+                    if (he.Z == ion.Z)
+                    {
+                        he.ionIndex = i;
+                        usedHer.push_back(he);
+                    }
+                }
+            }
         }
         _numFluo = usedFlr.size();
         _numLym = usedLyr.size();
+        _numHe   = usedHer.size();
 
         // ------------ postprocess used resources ------------
 
@@ -454,6 +609,7 @@ void XRayIonicGasMix::setupSelfBefore()
         // There is some code duplication since we do this later in the calculating of the persistent data.
         if (resonantScattering())
         {
+            // Lyman
             for (auto& uly : usedLyr)
             {
                 // strore thermal velocity for convenience
@@ -466,6 +622,22 @@ void XRayIonicGasMix::setupSelfBefore()
                 {
                     if (b.Z == uly.Z && b.upper == uly.index) uly.sprob += b.prob;
                     if (uly.sprob == 1.) break;  // speed up since branching matrix has a lot of 1s and 0s
+                }
+            }
+
+            // Helium
+            for (auto& uhe : usedHer)
+            {
+                // store thermal velocity for convenience
+                uhe.vth = M_SQRT2 * vtherm(uhe.Z);
+
+                // total branching probability
+                uhe.sprob = 0.;
+                // add up all the probabilities for each current->lower branch
+                for (auto& b : hebResource)
+                {
+                    if (b.Z == uhe.Z && b.upper == uhe.index) uhe.sprob += b.prob;
+                    if (uhe.sprob == 1.) break;  // speed up since branching matrix has a lot of 1s and 0s
                 }
             }
         }
@@ -495,7 +667,9 @@ void XRayIonicGasMix::setupSelfBefore()
         // These are needed to sample atom velocities and to determine the branch to scatter to.
         if (resonantScattering())
         {
+            // Lyman
             _lymanParamv.resize(_numLym);
+            _lymanParamIndexForLine.clear();
             for (int l = 0; l != _numLym; ++l)
             {
                 const auto& uly = usedLyr[l];
@@ -507,6 +681,10 @@ void XRayIonicGasMix::setupSelfBefore()
                 lyp.index = uly.index;
                 lyp.lambda = uly.lam;
                 lyp.a = uly.lamA / (4. * M_PI * vth);
+                lyp.lowerJ = uly.lowerJ;
+                lyp.upperJ = uly.upperJ;
+
+                _lymanParamIndexForLine[{lyp.Z, lyp.index}] = l;
 
                 int Z = lyp.Z;
                 int upper = lyp.index;
@@ -521,6 +699,37 @@ void XRayIonicGasMix::setupSelfBefore()
 
                 // store the cumulative
                 NR::cdf(lyp.cumbranchingv, pLyl);
+            }
+            // Helium 
+            _heliumParamv.resize(_numHe);
+            _heliumParamIndexForLine.clear();
+            for (int h = 0; h != _numHe; ++h)
+            {
+                const auto& uhe = usedHer[h];
+                auto& hep = _heliumParamv[h];
+
+                double vth = M_SQRT2 * vtherm(uhe.Z);
+
+                hep.Z = uhe.Z;
+                hep.index = uhe.index;
+                hep.lambda = uhe.lam;
+                hep.a = uhe.lamA / (4. * M_PI * vth);
+                hep.lowerJ = uhe.lowerJ;
+                hep.upperJ = uhe.upperJ;
+
+                _heliumParamIndexForLine[{hep.Z, hep.index}] = h;
+
+                int Z = hep.Z;
+                int upper = hep.index;
+
+                Array pHel(0., upper + 1);
+                for (auto& b : hebResource)
+                {
+                    if (Z == b.Z && upper == b.upper) pHel[b.lower] = b.prob;
+                }
+
+                // store the cumulative
+                NR::cdf(hep.cumbranchingv, pHel);
             }
         }
     }
@@ -615,10 +824,16 @@ void XRayIonicGasMix::setupSelfBefore()
             sigma += upa.photoAbsorbThermalSection(E) * _abundances[upa.ionIndex];
         }
 
-        // resonant scattering
+        // resonant scattering　(Lyman)
         for (const auto& uly : usedLyr)
         {
             sigma += uly.section(lambda) * _abundances[uly.ionIndex];
+        }
+
+        // resonant scattering (Helium)
+        for (const auto& uhe : usedHer)
+        {
+            sigma += uhe.section(lambda) * _abundances[uhe.ionIndex];
         }
 
         _sigmaextv[ell] = sigma;
@@ -631,7 +846,7 @@ void XRayIonicGasMix::setupSelfBefore()
     _cumsigmascavv.resize(numLambda, 0);
 
     // provide temporary array for the non-normalized fluorescence/scattering contributions (at the current wavelength)
-    int numInteractions = _numIons + _numFluo + _numLym;
+    int numInteractions = _numIons + _numFluo + _numLym + _numHe;
     Array sections(numInteractions);
 
     // calculate the above for every wavelength; as before, leave the values for the outer wavelength points at zero
@@ -665,6 +880,15 @@ void XRayIonicGasMix::setupSelfBefore()
 
             double section = uly.section(lambda) * _abundances[uly.ionIndex] * uly.sprob;
             sections[_numIons + _numFluo + l] = section;
+        }
+
+        // resonant scattering (Helium)
+        for (int h = 0; h < _numHe; h++)
+        {
+            const auto& uhe = usedHer[h];
+
+            double section = uhe.section(lambda) * _abundances[uhe.ionIndex] * uhe.sprob;
+            sections[_numIons + _numFluo + _numLym + h] = section;
         }
 
         // determine the normalized cumulative probability distribution and the cross section
@@ -843,7 +1067,7 @@ void XRayIonicGasMix::setScatteringInfoIfNeeded(PhotonPacket* pp, const Material
             }
         }
         // Resonant Lyman scattering
-        else
+        else if (scatinfo->species < static_cast<int>( _numIons + _numFluo + _numLym))
         {
             int l = scatinfo->species - _numIons - _numFluo;
             const auto& ulyp = _lymanParamv[l];  // upper Lyman
@@ -856,7 +1080,7 @@ void XRayIonicGasMix::setScatteringInfoIfNeeded(PhotonPacket* pp, const Material
             double center;
             double a;
             double vth;
-            bool J32;  // true if Ju=3/2 -> happens at odd Lyman index
+            double dipoleFraction;
 
             // if coherent (no branching)
             if (lower == upper)
@@ -864,34 +1088,86 @@ void XRayIonicGasMix::setScatteringInfoIfNeeded(PhotonPacket* pp, const Material
                 vth = M_SQRT2 * vtherm(ulyp.Z);
                 a = ulyp.a;
                 center = ulyp.lambda;
-                J32 = upper % 2 == 1;
+                dipoleFraction = dipoleFractionFromJ(ulyp.lowerJ, ulyp.upperJ);
+                scatinfo->lambda = 0.;  // explicitly don't use
+            }
+            // if incoherent (branching)
+            else
+            {
+                auto it = _lymanParamIndexForLine.find({ulyp.Z, lower});
+                if (it == _lymanParamIndexForLine.end())
+                    throw FATALERROR("Lower Lyman branching line not found");
+
+                const auto& llyp = _lymanParamv[it->second];
+
+                // set parameters to those of the lower branching
+                vth = M_SQRT2 * vtherm(llyp.Z);
+                a = llyp.a;
+                center = llyp.lambda;
+                dipoleFraction = 0.0; // branching is isotropic
+
+                scatinfo->lambda = llyp.lambda;
+            }
+
+            // determine whether this scattering event uses the dipole phase function
+            scatinfo->dipole = random()->uniform() < dipoleFraction;
+
+            // sample an atom velocity from the Voigt profile
+            scatinfo->velocity =
+                LyUtils::sampleAtomVelocity(lambda, center, vth, a, temperature(), state->numberDensity(),
+                                            pp->direction(), config(), random());
+        }
+        // Resonant Helium scattering 
+        else
+        {
+            int h = scatinfo->species - _numIons - _numFluo - _numLym;
+            const auto& hep = _heliumParamv[h];
+
+            int upper = hep.index;
+            int lower = NR::locateFail(hep.cumbranchingv, random()->uniform());
+
+            if (lower == -1) throw FATALERROR("Sampling from Helium branching probability has failed");
+
+            double center;
+            double a;
+            double vth;
+            double dipoleFraction;
+
+            // if coherent (no branching)
+            if (lower == upper)
+            {
+                vth = M_SQRT2 * vtherm(hep.Z);
+                a = hep.a;
+                center = hep.lambda;
+                dipoleFraction = dipoleFractionFromJ(hep.lowerJ, hep.upperJ);
 
                 scatinfo->lambda = 0.;  // explicitly don't use
             }
             // if incoherent (branching)
             else
             {
-                int index = l - (upper - lower);  // index of the lower branching
-                if (index < 0 || index >= _numLym) throw FATALERROR("upper/lower index out of range");
+                auto it = _heliumParamIndexForLine.find({hep.Z, lower});
+                if (it == _heliumParamIndexForLine.end())
+                    throw FATALERROR("Lower Helium branching line not found");
 
-                const auto& llyp = _lymanParamv[index];  // lower Lyman
+                const auto& hlyp = _heliumParamv[it->second];
 
                 // set parameters to those of the lower branching
-                vth = M_SQRT2 * vtherm(llyp.Z);
-                a = llyp.a;
-                center = llyp.lambda;
-                J32 = false;  // branching is isotropic
+                vth = M_SQRT2 * vtherm(hlyp.Z);
+                a = hlyp.a;
+                center = hlyp.lambda;
+                dipoleFraction = 0.0; // branching is isotropic
 
-                scatinfo->lambda = llyp.lambda;
+                scatinfo->lambda = hlyp.lambda;
             }
 
-            // if J32 -> Lya1, Lyb1, ... -> 50/50   dipole/isotropic
-            // if J12 -> Lya2, Lyb2, ... -> 100     isotropic
-            scatinfo->dipole = J32 ? random()->uniform() < 0.5 : false;
+            // determine whether this scattering event uses the dipole phase function
+            scatinfo->dipole = random()->uniform() < dipoleFraction;
 
-            // sample a atom velocity from Voigt profile
-            scatinfo->velocity = LyUtils::sampleAtomVelocity(
-                lambda, center, vth, a, temperature(), state->numberDensity(), pp->direction(), config(), random());
+            // sample an atom velocity from the Voigt profile
+            scatinfo->velocity =
+                LyUtils::sampleAtomVelocity(lambda, center, vth, a, temperature(), state->numberDensity(),
+                                            pp->direction(), config(), random());
         }
     }
 }
@@ -908,7 +1184,7 @@ bool XRayIonicGasMix::peeloffScattering(double& I, double& Q, double& U, double&
     // Compton scattering in electron rest frame; with support for polarization if enabled
     if (scatinfo->species < _numIons)
     {
-        int i = scatinfo->species - _numIons;
+        int i = scatinfo->species;
         const auto& ion = _ionParamv[i];
         // transform the wavelength into the rest frame of the electron
         lambda = PhotonPacket::shiftedReceptionWavelength(lambda, pp->direction(), scatinfo->velocity);
@@ -964,7 +1240,7 @@ void XRayIonicGasMix::performScattering(double lambda, const MaterialState* stat
     // determine the new propagation direction and wavelength, and if polarized, update the stokes vector
     if (scatinfo->species < _numIons)
     {
-        int i = scatinfo->species - _numIons;
+        int i = scatinfo->species;
         const auto& ion = _ionParamv[i];
         lambda = PhotonPacket::shiftedReceptionWavelength(lambda, pp->direction(), scatinfo->velocity);
         bfknew = _com->performScattering(lambda, ion.Z, pp->direction(), pp);
