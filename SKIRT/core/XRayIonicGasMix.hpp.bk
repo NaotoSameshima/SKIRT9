@@ -463,10 +463,9 @@ private:
         double lambda;  // wavelength (m)
         double width;   // width (eV)
     };
-    // Resonant scattering -> ResonaceLineParam
+    // Resonant scattering -> LymanParam
     struct ResonanceLineParam
     {
-        int ionIndex;
         int Z;                // atomic number
         int index;            // Lyman index (alpha1/2, alpha3/2, beta1/2, ...)
         double lambda;        // wavelength (m)
@@ -477,16 +476,19 @@ private:
     };
 
     int _numIons;  // number of ions
-    int _numFluo;  // number of fluorescence (+RR) transitions
-    int _numRes;   // number of resonant scattering transitions
-    
+    int _numFluo;  // number of fluorescence (+Lyman RC) transitions
+    int _numLym;   // number of Lyman resonant scattering transitions
+    int _numHe;    // number of Helium-like resonant scattering transitions
+
 
     // persistent data for scattering
     vector<IonParam> _ionParamv;
     vector<FluorescenceParam> _fluorescenceParamv;
-    vector<ResonanceLineParam> _resonanceParamv;
+    vector<ResonanceLineParam> _lymanParamv;
+    vector<ResonanceLineParam> _heliumParamv;
     vector<double> _vthermv;  // indexed on Z
-    std::map<std::pair<int, int>, int> _resonanceParamIndexForLine;
+    std::map<std::pair<int, int>, int> _lymanParamIndexForLine;
+    std::map<std::pair<int, int>, int> _heliumParamIndexForLine;
 
     // wavelength grid (shifted to the left of the actually sampled points to approximate rounding)
     Array _lambdav;
