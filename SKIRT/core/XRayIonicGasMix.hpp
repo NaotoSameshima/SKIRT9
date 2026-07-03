@@ -510,7 +510,7 @@ private:
         int N;  // number of electrons
     };
     // Compton scattering -> IonParam
-    // Fluorescence (+Lyman RC) -> FluorescenceParam
+    // Fluorescence (+RR) -> FluorescenceParam
     struct FluorescenceParam
     {
         int Z;          // atomic number
