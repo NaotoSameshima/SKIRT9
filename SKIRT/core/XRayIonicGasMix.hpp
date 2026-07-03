@@ -522,7 +522,7 @@ private:
     {
         int ionIndex;
         int Z;                // atomic number
-        int index;            // Lyman index (alpha1/2, alpha3/2, beta1/2, ...)
+        int index;            // line index 
         double lambda;        // wavelength (m)
         double a;             // Voigt parameter
         double lowerJ;
