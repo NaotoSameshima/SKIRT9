@@ -63,6 +63,14 @@ namespace
         return result;
     }
 
+    // Return the dipole fraction of the angular redistribution matrix for an
+    // electric-dipole transition J_l -> J_u.
+    //
+    // Following Hamilton (1947), the E1 redistribution matrix is written as a
+    // weighted sum of the monopole and dipole terms. Here E1 and E2
+    // denote the corresponding Hamilton coefficients for the given Delta J.
+    // The returned value, E2 / (E1 + E2), is therefore the fraction of the
+    // dipole component.
     double dipoleFractionFromJ(double lowerJ, double upperJ)
     {
         const double j = lowerJ;
@@ -165,25 +173,23 @@ namespace
         double W;         // FWHM of the Lorentz shape for the emitted photon (eV), or zero
     };
 
+    // resource data for line transitions
     struct LineResource
     {
-        LineResource(const Array& a)
-            : Z(a[0]), index(a[1]), lowerLevelIndex(a[2]), upperLevelIndex(a[3]),
-            lowerJ(a[4]), upperJ(a[5]), lam(a[6]), lamA(a[7])
-        {}
+        LineResource(const Array& a): Z(a[0]), index(a[1]), lowerLevelIndex(a[2]), upperLevelIndex(a[3]),lowerJ(a[4]), upperJ(a[5]), lam(a[6]), lamA(a[7]) {}
 
-        int ionIndex{-1};
-        double sprob{-1};
-        double vth{-1};
+        int ionIndex{-1};   // index of the corresponding ion in the user-specified ion list
+        double sprob{-1};   // total probability that resonant absorption leads to re-emission
+        double vth{-1};     // thermal velocity used for the line profile [m/s]
 
-        int Z;
-        int index;
-        int lowerLevelIndex;
-        int upperLevelIndex;
-        double lowerJ;
-        double upperJ;
-        double lam;   // wavelength [m]
-        double lamA;  // lambda * A [m/s]
+        int Z;                    // atomic number
+        int index;                // line index used to identify this transition
+        int lowerLevelIndex;      // index of the lower level
+        int upperLevelIndex;      // index of the upper level
+        double lowerJ;            // total angular momentum of the lower level
+        double upperJ;            // total angular momentum of the upper level
+        double lam;               // transition wavelength [m]
+        double lamA;              // lambda times Einstein A coefficient [m/s]
 
         double section(double lambda) const
         {
@@ -193,17 +199,20 @@ namespace
         }
     };
 
+    // resource data for resonant-scattering branching probabilities
     struct BranchResource
     {
         BranchResource(const Array& a) : Z(a[0]), upper(a[1]), lower(a[2]), prob(a[3]) {}
 
-        int ionIndex{-1};
-        int Z;
-        int upper;
-        int lower;
-        double prob;
+        int ionIndex{-1};  // index of the corresponding ion in the user-specified ion list
+
+        int Z;             // atomic number
+        int upper;         // index of the absorbed transition
+        int lower;         // index of the emitted transition after branching
+        double prob;       // branching probability from the upper transition to the lower transition
     };
 
+    // load line-transition resources from a text file that also contains term labels
     vector<LineResource> loadLineResources(string filename, string description)
     {
         vector<LineResource> result;
@@ -237,9 +246,7 @@ namespace
             double lambda;
             double lambdaA;
 
-            if (!(iss >> Z >> lineIndex >> lowerLevelIndex >> upperLevelIndex
-                    >> lowerLevelTerm >> upperLevelTerm
-                    >> lowerJ >> upperJ >> lambda >> lambdaA))
+            if (!(iss >> Z >> lineIndex >> lowerLevelIndex >> upperLevelIndex >> lowerLevelTerm >> upperLevelTerm >> lowerJ >> upperJ >> lambda >> lambdaA))
             {
                 throw FATALERROR("Invalid row in the " + description + " text file " + filepath);
             }
@@ -260,21 +267,25 @@ namespace
         return result;  
     }
 
+    // return the resource filename for line transition data with a given number of electrons
     string lineFilename(int N)
     {
         return "Ionic_LN_N" + std::to_string(N) + ".txt";
     }
 
+    // return the resource filename for radiative recombination branching probabilities with a given number of electrons
     string branchRrFilename(int N)
     {
         return "Ionic_BR_RR_N" + std::to_string(N) + ".stab";
     }
 
+    // return the resource filename for resonant scattering branching probabilities with a given number of electrons
     string branchRsFilename(int N)
     {
         return "Ionic_BR_RS_N" + std::to_string(N) + ".txt";
     }
 
+    // return whether the specified resource file is available
     bool resourceExists(string filename)
     {
         try
@@ -469,7 +480,8 @@ void XRayIonicGasMix::setupSelfBefore()
     }
     _numIons = _ionParamv.size();
     std::set<int> requestedLineNv = usedNv;
-    // Li-like K-shell PI -> He-like z needs the He-like z-line wavelength.
+
+    // Li-like II -> He-like z needs the He-like z-line wavelength.
     // This does not imply that He-like ions themselves are included in the model.
     if (usedNv.count(3) != 0)
     {
@@ -504,7 +516,7 @@ void XRayIonicGasMix::setupSelfBefore()
         // ------------ load full resources ------------
 
         // photo-absorption data
-        auto paResource = loadStruct<PhotoAbsorbResource, 10>(this, "Ionic_PA.txt", "photoabsorption data");
+        auto paResource = loadStruct<PhotoAbsorbResource, 10>(this, "Ionic_PA.txt", "photo-absorption data");
 
         // fluorescence data
         auto flResource = loadStruct<FluorescenceResource, 7>(this, "Ionic_FL.txt", "fluorescence data");
@@ -513,7 +525,6 @@ void XRayIonicGasMix::setupSelfBefore()
         std::map<int, vector<LineResource>> lineResources;
         std::map<int, std::unique_ptr<StoredTable<3>>> branchRrResources;
         std::map<int, vector<BranchResource>> branchRsResources;
-        std::set<int> activeLineNv;
 
         for (int N : requestedLineNv)
         {
@@ -521,30 +532,33 @@ void XRayIonicGasMix::setupSelfBefore()
 
             string Nstr = std::to_string(N);
 
-            // Load line data whenever it exists.
-            // This may be needed either for actual RR/RS line treatment
-            // or only as a wavelength reference for special channels such as
-            // Li-like K-shell PI -> He-like z.
+            // Load line data whenever it exists.　This may be needed either for actual RR/RS line treatment
+            // or only as a wavelength reference for special channels such as　Li-like II -> He-like z.
             lineResources[N] = loadLineResources(lineFilename(N), "line data for N=" + Nstr);
 
-            // Only ions explicitly present in the ski file can have their own
-            // recombination/resonant line treatment.
+            // Line data may have been loaded only as a wavelength reference.
+            // Actual RR/RS treatment is enabled only for ions explicitly included in the ski file.
             if (usedNv.count(N) == 0) continue;
 
             bool hasRr = resourceExists(branchRrFilename(N));
-            bool hasRs = !resonantScattering() || resourceExists(branchRsFilename(N));
+            bool hasRs = resourceExists(branchRsFilename(N));
 
-            if (!hasRr || !hasRs) continue;
+            // RR branching data are currently used only for H-like and He-like ions.
+            // For higher-electron ions, missing RR branching resources are allowed.
+            bool useRr = (N <= 2 && hasRr);
 
-            activeLineNv.insert(N);
+            // RS branching data are used whenever resonant scattering is enabled
+            // and the corresponding resource file is available.
+            bool useRs = (resonantScattering() && hasRs);
 
-            branchRrResources[N] = std::unique_ptr<StoredTable<3>>(
-                new StoredTable<3>(this, branchRrFilename(N), "Z(1),Index(1),T(K)", "Y(1)"));
-
-            if (resonantScattering())
+            if (useRr)
             {
-                branchRsResources[N] = loadStruct<BranchResource, 4>(
-                    this, branchRsFilename(N), "resonant branching probabilities for N=" + Nstr);
+                branchRrResources[N] = std::unique_ptr<StoredTable<3>>(new StoredTable<3>(this, branchRrFilename(N), "Z(1),Index(1),T(K)", "Y(1)"));
+            }
+
+            if (useRs)
+            {
+                branchRsResources[N] = loadStruct<BranchResource, 4>(this, branchRsFilename(N), "resonant branching probabilities for N=" + Nstr);
             }
         }
 
@@ -554,10 +568,11 @@ void XRayIonicGasMix::setupSelfBefore()
         // Recombination lines can be modelled as fluorescence following an inner-shell PA (n,l)=(1,0).
         // This ignores the cascade and only models the transition back to the inner shell.
         // There is no PA data for (n,l)=(1,0), so we can simply add them without worrying about duplicates.
-        for (int N : activeLineNv)
+        for (const auto& entry : branchRrResources)
         {
+            int N = entry.first;
+            const auto& branchRrResource = entry.second;
             const auto& lineResource = lineResources[N];
-            const auto& branchRrResource = branchRrResources[N];
 
             flResource.reserve(flResource.size() + lineResource.size());
 
@@ -568,15 +583,12 @@ void XRayIonicGasMix::setupSelfBefore()
                 double E = wavelengthToFromEnergy(line.lam);
                 double omega = (*branchRrResource)(Z, index, temperature());
 
-                Array params = {Z, static_cast<double>(N), 1., 0., omega, E, 0.};  // Z, N, n, l, omega, E, W
+                Array params = {Z, static_cast<double>(N), 1., 0., omega, E, 0.};
                 flResource.emplace_back(params);
             }
         }
 
-        // Special ionization-induced line emission:
-        // Li-like K-shell PI → He-like z.
-        // This is still a special case. If more such channels are needed, they should probably get
-        // their own resource file rather than being hard-coded here.
+        // Li-like II -> He-like z.
         if (usedNv.count(3) != 0 && lineResources.count(2) != 0)
         {
             const auto& heLineResource = lineResources[2];
@@ -589,7 +601,7 @@ void XRayIonicGasMix::setupSelfBefore()
                 double E = wavelengthToFromEnergy(line.lam);
                 double omega = 1.0;
 
-                Array params = {Z, 3., 1., 0., omega, E, 0.};  // Li-like K-shell PI → He-like z
+                Array params = {Z, 3., 1., 0., omega, E, 0.};  
                 flResource.emplace_back(params);
             }
         }
@@ -701,8 +713,8 @@ void XRayIonicGasMix::setupSelfBefore()
         // ------------ calculate/store persistent data ------------
 
         // The persistent data is the data that is needed beyond the setup (scattering)
-        // No changes should be made to the usedFlr, usedLyr, or lybr arrays after this point.
-        // The usedFlr and usedLyr need to be in the same order as the persistent params!
+        // No changes should be made to the usedFlr, usedLines, or usedBranchRs arrays after this point.
+        // The usedFlr and usedLines arrays need to remain consistent with the persistent parameter arrays.
 
         // Fluorescence
         // Store the Z, wavelength, and width of each fluorescence transition.
@@ -1050,7 +1062,7 @@ void XRayIonicGasMix::setScatteringInfoIfNeeded(PhotonPacket* pp, const Material
             const auto& ion = _ionParamv[i];
             scatinfo->velocity = vtherm(ion.Z) * random()->maxwell();
         }
-        // Fluorescenct emission (scattering)
+        // Fluorescent emission (scattering)
         else if (scatinfo->species < _numIons + _numFluo)
         {
             int f = scatinfo->species - _numIons;
