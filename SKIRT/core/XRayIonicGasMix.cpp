@@ -599,7 +599,7 @@ void XRayIonicGasMix::setupSelfBefore()
 
                 double Z = line.Z;
                 double E = wavelengthToFromEnergy(line.lam);
-                double omega = 1.0;
+                double omega = 0.75;
 
                 Array params = {Z, 3., 1., 0., omega, E, 0.};  
                 flResource.emplace_back(params);
